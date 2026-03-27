@@ -79,7 +79,7 @@ ${commentTexts}`;
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { temperature: 0.5, maxOutputTokens: 1024 },
+        generationConfig: { temperature: 0.5, maxOutputTokens: 8192 },
       }),
     });
 
@@ -102,7 +102,7 @@ ${commentTexts}`;
 
   const botComment = await context.reddit.submitComment({
     id: postId,
-    text: `**[Riassunto Bot]** *Questo post ha raggiunto ${COMMENT_THRESHOLD}+ commenti. Ecco un riassunto generato dall'IA della discussione:*\n\n${summary}\n\n---\n*^(Questo riassunto è stato generato automaticamente da un bot. Potrebbe non catturare tutte le sfumature della discussione.)*`,
+    text: `**[TL;DR]** *Questo post ha raggiunto ${COMMENT_THRESHOLD}+ commenti. Ecco un riassunto generato dall'IA della discussione:*\n\n${summary}\n\n---\n*^(Questo riassunto è stato generato automaticamente da un bot. Potrebbe non catturare tutte le sfumature della discussione.)*`,
   });
 
   await botComment.distinguish(true);
