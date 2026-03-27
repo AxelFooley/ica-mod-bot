@@ -2,24 +2,24 @@ import { Devvit, TriggerContext } from '@devvit/public-api';
 
 const COMMENT_THRESHOLD = 75;
 const MAX_COMMENTS_FOR_SUMMARY = 50;
-const GEMINI_MODEL = 'gemini-2.0-flash';
-const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions';
+const OPENROUTER_MODEL = 'nvidia/nemotron-super-49b-v1:free';
+const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
 
 Devvit.configure({
   redditAPI: true,
   redis: true,
   http: {
-    domains: ['generativelanguage.googleapis.com'],
+    domains: ['openrouter.ai'],
   },
 });
 
 Devvit.addSettings([
   {
-    name: 'gemini-api-key',
-    label: 'Gemini API Key',
+    name: 'openrouter-api-key',
+    label: 'OpenRouter API Key',
     type: 'string',
     scope: 'installation',
-    helpText: 'Your Google Gemini API key (from aistudio.google.com/apikey)',
+    helpText: 'Your OpenRouter API key (from openrouter.ai/keys)',
   },
 ]);
 
@@ -65,39 +65,42 @@ Titolo del post: "${post.title}"
 Commenti principali:
 ${commentTexts}`;
 
-  const apiKey = await context.settings.get('gemini-api-key');
+  const apiKey = await context.settings.get('openrouter-api-key');
   if (!apiKey) {
-    console.error('No Gemini API key configured');
+    console.error('No OpenRouter API key configured');
     return 'no_api_key';
   }
 
   let summary: string;
   try {
-    const response = await fetch(GEMINI_URL, {
+    const response = await fetch(OPENROUTER_URL, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
+        'HTTP-Referer': 'https://www.reddit.com',
+        'X-Title': 'ICA Mod Bot',
       },
       body: JSON.stringify({
-        model: GEMINI_MODEL,
+        model: OPENROUTER_MODEL,
         messages: [{ role: 'user', content: prompt }],
       }),
     });
 
     if (!response.ok) {
-      console.error(`Gemini API error: ${response.status} ${response.statusText}`);
+      const errorText = await response.text().catch(() => '');
+      console.error(`OpenRouter API error: ${response.status} ${response.statusText} — ${errorText}`);
       return 'api_error';
     }
 
     const data = await response.json();
     summary = data?.choices?.[0]?.message?.content;
     if (!summary) {
-      console.error('No summary returned from Gemini');
+      console.error('No summary returned from OpenRouter:', JSON.stringify(data));
       return 'api_error';
     }
   } catch (err) {
-    console.error('Failed to call Gemini API:', err);
+    console.error('Failed to call OpenRouter API:', err);
     return 'api_error';
   }
 
@@ -145,7 +148,7 @@ Devvit.addMenuItem({
     if (result === 'already_done') {
       context.ui.showToast('Already summarized (this should not appear in forced mode).');
     } else if (result === 'no_api_key') {
-      context.ui.showToast('Error: Gemini API key not configured.');
+      context.ui.showToast('Error: OpenRouter API key not configured.');
     } else if (result === 'api_error') {
       context.ui.showToast('Error calling the AI API. Check the logs.');
     } else {
