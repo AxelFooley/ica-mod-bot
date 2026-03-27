@@ -1,7 +1,7 @@
 import { Devvit } from '@devvit/public-api';
 import type { TriggerContext } from '@devvit/public-api';
 
-const COMMENT_THRESHOLD = 75;
+const COMMENT_THRESHOLD = 5; // TODO: restore to 75 before production deploy
 const MAX_COMMENTS_FOR_SUMMARY = 50;
 const GEMINI_MODEL = 'gemini-2.5-flash';
 // Native Gemini REST API — stable and globally allowlisted by Devvit
@@ -38,8 +38,10 @@ async function performSummary(
     if (alreadyDone) return 'already_done';
   }
 
-  // Claim the job before any async work to prevent races
-  await context.redis.set(redisKey, '1');
+  // Claim the job before any async work to prevent races.
+  // TTL of 30 days keeps us within Reddit's data-retention policy.
+  const THIRTY_DAYS_SECONDS = 30 * 24 * 60 * 60;
+  await context.redis.set(redisKey, '1', { expiration: THIRTY_DAYS_SECONDS });
 
   // Fetch the full Post model for title
   const post = await context.reddit.getPostById(postId);
@@ -57,13 +59,19 @@ async function performSummary(
     .map((c, i) => `Commento ${i + 1} (${c.score} upvote):\n${c.body.trim()}`)
     .join('\n\n---\n\n');
 
-  const prompt = `Sei un bot moderatore di Reddit per il subreddit r/italiacareeradvice. Il post intitolato "${post.title}" ha raggiunto molti commenti e devi riassumere la discussione in italiano.
+  const prompt = `Sei un bot che riassume discussioni Reddit in italiano.
 
-Riassumi i temi principali, le opinioni più comuni, e i punti più interessanti. Sii neutrale, conciso e utile. Formatta l'output con una breve frase introduttiva, poi bullet point con i punti principali.
+REGOLE ASSOLUTE — non derogabili:
+- NON scrivere saluti, presentazioni o frasi introduttive (niente "Ciao a tutti", niente "Come moderatore", niente contesto sul post).
+- NON scrivere conclusioni o auguri finali (niente "Spero che...", niente "Continuate a...", niente ringraziamenti).
+- Inizia DIRETTAMENTE con i bullet point. Nient'altro prima.
+- Ogni bullet point deve essere conciso (max 2 righe).
+- Usa il formato: "* **Tema**: descrizione"
+- Sii neutrale e oggettivo.
 
 Titolo del post: "${post.title}"
 
-Commenti principali:
+Commenti da riassumere:
 ${commentTexts}`;
 
   const apiKey = await context.settings.get('gemini-api-key');
@@ -102,13 +110,24 @@ ${commentTexts}`;
 
   const botComment = await context.reddit.submitComment({
     id: postId,
-    text: `**[TL;DR]** *Questo post ha raggiunto ${COMMENT_THRESHOLD}+ commenti. Ecco un riassunto generato dall'IA della discussione:*\n\n${summary}\n\n---\n*^(Questo riassunto è stato generato automaticamente da un bot. Potrebbe non catturare tutte le sfumature della discussione.)*`,
+    text: `**[TL;DR]** Questo post ha raggiunto ${COMMENT_THRESHOLD}+ commenti. Ecco un riassunto generato dall'IA della discussione:\n\nEcco i punti chiave della conversazione:\n\n${summary}\n\n---\n*^(Riassunto generato automaticamente. Potrebbe non catturare tutte le sfumature della discussione.)*`,
   });
 
   await botComment.distinguish(true);
 
   return 'success';
 }
+
+// Deletion trigger: clean up Redis when a post is deleted (required by Devvit Rules)
+Devvit.addTrigger({
+  event: 'PostDelete',
+  async onEvent(event, context) {
+    const postId = event.postId;
+    if (!postId) return;
+    await context.redis.del(`summarized:${postId}`);
+    console.log(`Cleaned up Redis key for deleted post ${postId}`);
+  },
+});
 
 // Automatic trigger: fires on every new comment
 Devvit.addTrigger({
