@@ -1,10 +1,6 @@
 {
   "$schema": "https://developers.reddit.com/schema/config-file.v1.json",
   "name": "ica-mod-bot",
-  "server": {
-    "dir": "dist/server",
-    "entry": "index.cjs"
-  },
   "permissions": {
     "redis": true
   },
