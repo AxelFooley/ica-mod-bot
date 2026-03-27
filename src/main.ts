@@ -3,7 +3,7 @@ import type { TriggerContext } from '@devvit/public-api';
 
 const COMMENT_THRESHOLD = 75;
 const MAX_COMMENTS_FOR_SUMMARY = 50;
-const GEMINI_MODEL = 'gemini-2.0-flash';
+const GEMINI_MODEL = 'gemini-2.5-flash';
 // Native Gemini REST API — stable and globally allowlisted by Devvit
 const GEMINI_URL = (apiKey: string) =>
   `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`;
