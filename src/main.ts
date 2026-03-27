@@ -40,8 +40,8 @@ async function performSummary(
 
   // Claim the job before any async work to prevent races.
   // TTL of 30 days keeps us within Reddit's data-retention policy.
-  const THIRTY_DAYS_SECONDS = 30 * 24 * 60 * 60;
-  await context.redis.set(redisKey, '1', { expiration: THIRTY_DAYS_SECONDS });
+  const thirtyDaysFromNow = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+  await context.redis.set(redisKey, '1', { expiration: thirtyDaysFromNow });
 
   // Fetch the full Post model for title
   const post = await context.reddit.getPostById(postId);
