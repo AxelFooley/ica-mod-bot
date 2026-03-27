@@ -11,9 +11,7 @@ const GEMINI_URL = (apiKey: string) =>
 Devvit.configure({
   redditAPI: true,
   redis: true,
-  http: {
-    domains: ['generativelanguage.googleapis.com'],
-  },
+  http: true,
 });
 
 Devvit.addSettings([
