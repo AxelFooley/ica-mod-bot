@@ -1,25 +1,28 @@
-import { Devvit, TriggerContext } from '@devvit/public-api';
+import { Devvit } from '@devvit/public-api';
+import type { TriggerContext } from '@devvit/public-api';
 
 const COMMENT_THRESHOLD = 75;
 const MAX_COMMENTS_FOR_SUMMARY = 50;
-const OPENROUTER_MODEL = 'nvidia/nemotron-super-49b-v1:free';
-const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
+const GEMINI_MODEL = 'gemini-2.0-flash';
+// Native Gemini REST API — stable and globally allowlisted by Devvit
+const GEMINI_URL = (apiKey: string) =>
+  `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`;
 
 Devvit.configure({
   redditAPI: true,
   redis: true,
   http: {
-    domains: ['openrouter.ai'],
+    domains: ['generativelanguage.googleapis.com'],
   },
 });
 
 Devvit.addSettings([
   {
-    name: 'openrouter-api-key',
-    label: 'OpenRouter API Key',
+    name: 'gemini-api-key',
+    label: 'Gemini API Key',
     type: 'string',
     scope: 'installation',
-    helpText: 'Your OpenRouter API key (from openrouter.ai/keys)',
+    helpText: 'Your Google Gemini API key (from aistudio.google.com/apikey)',
   },
 ]);
 
@@ -65,42 +68,37 @@ Titolo del post: "${post.title}"
 Commenti principali:
 ${commentTexts}`;
 
-  const apiKey = await context.settings.get('openrouter-api-key');
+  const apiKey = await context.settings.get('gemini-api-key');
   if (!apiKey) {
-    console.error('No OpenRouter API key configured');
+    console.error('No Gemini API key configured');
     return 'no_api_key';
   }
 
   let summary: string;
   try {
-    const response = await fetch(OPENROUTER_URL, {
+    const response = await fetch(GEMINI_URL(apiKey as string), {
       method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-        'HTTP-Referer': 'https://www.reddit.com',
-        'X-Title': 'ICA Mod Bot',
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: OPENROUTER_MODEL,
-        messages: [{ role: 'user', content: prompt }],
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { temperature: 0.5, maxOutputTokens: 1024 },
       }),
     });
 
     if (!response.ok) {
       const errorText = await response.text().catch(() => '');
-      console.error(`OpenRouter API error: ${response.status} ${response.statusText} — ${errorText}`);
+      console.error(`Gemini API error: ${response.status} ${response.statusText} — ${errorText}`);
       return 'api_error';
     }
 
     const data = await response.json();
-    summary = data?.choices?.[0]?.message?.content;
+    summary = data?.candidates?.[0]?.content?.parts?.[0]?.text;
     if (!summary) {
-      console.error('No summary returned from OpenRouter:', JSON.stringify(data));
+      console.error('No summary returned from Gemini:', JSON.stringify(data));
       return 'api_error';
     }
   } catch (err) {
-    console.error('Failed to call OpenRouter API:', err);
+    console.error('Failed to call Gemini API:', err);
     return 'api_error';
   }
 
@@ -148,7 +146,7 @@ Devvit.addMenuItem({
     if (result === 'already_done') {
       context.ui.showToast('Already summarized (this should not appear in forced mode).');
     } else if (result === 'no_api_key') {
-      context.ui.showToast('Error: OpenRouter API key not configured.');
+      context.ui.showToast('Error: Gemini API key not configured.');
     } else if (result === 'api_error') {
       context.ui.showToast('Error calling the AI API. Check the logs.');
     } else {

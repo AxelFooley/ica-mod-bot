@@ -2,6 +2,7 @@
   "name": "ica-mod-bot",
   "version": "0.0.1",
   "private": true,
+  "type": "module",
   "scripts": {
     "build": "devvit build",
     "dev": "devvit playtest",

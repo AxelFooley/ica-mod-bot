@@ -1,7 +1,9 @@
 {
-  "extends": "@devvit/tsconfig/tsconfig.json",
+  "extends": "@devvit/tsconfig/base.json",
   "compilerOptions": {
-    "outDir": "./dist"
+    "outDir": "./dist",
+    "skipLibCheck": true,
+    "types": []
   },
   "include": ["src"]
 }
