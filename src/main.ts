@@ -6,7 +6,7 @@ Devvit.configure({
   http: true,
 });
 
-const COMMENT_THRESHOLD = 75;
+const COMMENT_THRESHOLD = 25;
 const MAX_COMMENTS_FOR_SUMMARY = 50;
 const GEMINI_MODEL = 'gemini-2.5-flash';
 const GEMINI_URL = (apiKey: string) =>
