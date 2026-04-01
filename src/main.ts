@@ -1,4 +1,5 @@
 import { Devvit, TriggerContext } from '@devvit/public-api';
+import { log, buildCommentTexts } from './helpers.js';
 
 Devvit.configure({
   redditAPI: true,
@@ -12,11 +13,6 @@ const GEMINI_MODEL = 'gemini-2.5-flash';
 const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
 
 type SummaryResult = 'already_done' | 'no_api_key' | 'api_error' | 'success';
-
-function log(level: 'info' | 'warn' | 'error', msg: string, data?: unknown): void {
-  const entry = JSON.stringify({ level, msg, ...(data !== undefined ? { data } : {}) });
-  level === 'error' ? console.error(entry) : console.log(entry);
-}
 
 // ---------------------------------------------------------------------------
 // Core summarisation logic — runs inside the Devvit Blocks runtime where
@@ -51,17 +47,7 @@ async function performSummary(
       .getComments({ postId, sort: 'top', pageSize: MAX_COMMENTS_FOR_SUMMARY })
       .all();
 
-    const commentTexts = comments
-      .slice(0, MAX_COMMENTS_FOR_SUMMARY)
-      .filter(
-        (c) =>
-          c.body &&
-          c.body.trim().length > 0 &&
-          c.body.trim() !== '[removed]' &&
-          c.body.trim() !== '[deleted]',
-      )
-      .map((c, i) => `Commento ${i + 1} (${c.score} upvote):\n${c.body!.trim()}`)
-      .join('\n\n---\n\n');
+    const commentTexts = buildCommentTexts(comments.slice(0, MAX_COMMENTS_FOR_SUMMARY));
 
     const systemInstruction = `Sei un bot che riassume discussioni Reddit in italiano.
 

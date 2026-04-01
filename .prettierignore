@@ -1,0 +1,5 @@
+node_modules/
+dist/
+.devvit/
+package-lock.json
+*.md
