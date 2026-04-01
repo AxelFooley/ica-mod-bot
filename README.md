@@ -1,259 +1,179 @@
-# Devvit Post Summarizer
+# ica-mod-bot
 
-AI-powered post summarization for Reddit. Automatically summarizes posts when they reach 75 comments using OpenRouter AI.
+AI-powered post summarizer for Reddit, built with [Devvit](https://developers.reddit.com/). Automatically summarizes posts when they reach a comment threshold using Google Gemini.
 
 ## Features
 
-- 📊 **Auto-trigger**: Summarizes posts at 75 comments automatically
-- 🇮🇹 **Italian language**: Optimized for r/ItaliaCareerAdvice
-- 📌 **Pinned summaries**: Posts summaries as distinguished mod comments
-- 🔧 **Manual trigger**: Moderators can force summarization anytime
-- 🔑 **Per-subreddit config**: Each subreddit manages its own API key
-- ⚡ **Smart deduplication**: Only summarizes each post once
+- **Auto-trigger**: Summarizes posts at 25 comments automatically
+- **Italian language**: Optimized for r/ItaliaCareerAdvice
+- **Pinned summaries**: Posts summaries as distinguished mod comments
+- **Manual trigger**: Moderators can force summarization via the post menu
+- **Per-subreddit config**: Each subreddit manages its own Gemini API key
+- **Deduplication**: Each post is summarized only once (atomic Redis lock)
 
-## Installation
-
-### 1. Prerequisites
+## Prerequisites
 
 - Node.js 18+
-- Reddit app with Devvit enabled
-- OpenRouter API key ([Get free key](https://openrouter.ai/))
+- A Google Gemini API key ([Get one free at aistudio.google.com](https://aistudio.google.com/apikey))
+- Devvit CLI installed
 
-### 2. Create the App
+## Setup
 
-Install the Devvit CLI:
-
-```bash
-npm install -g @devvit/public-api
-```
-
-Create a new app:
+### 1. Install the Devvit CLI
 
 ```bash
-devvit new
+npm install -g @devvit/cli
 ```
 
-Or clone this project to your Devvit apps directory.
+The CLI binary is `devvit-cli`. All `npm run` scripts in this project already call `devvit-cli` internally.
 
-### 3. Configure API Key
+### 2. Install dependencies
 
-You have two options:
-
-**Option A: Via Menu Item**
-1. On any post in your subreddit, click "⋮" → "Summarize Post"
-2. The bot will reply with setup instructions
-3. Reply with `!setup-key YOUR_OPENROUTER_API_KEY`
-4. Your comment will be deleted to protect the key
-
-**Option B: Via Redis (Advanced)**
 ```bash
-# If you have Redis CLI access
-redis-cli
-> SET subreddit:YOUR_SUBREDDIT:openrouter_key "sk-or-v1-..."
-> EXIT
+npm install
 ```
 
-## Usage
+### 3. Log in to Devvit
 
-### Automatic Summarization
+```bash
+devvit-cli login
+```
 
-Once configured, the app works automatically:
+### 4. Configure your Gemini API key
 
-1. New comments are counted in Redis
-2. When a post reaches 75 comments, summarization triggers
-3. OpenRouter API generates a summary in Italian
-4. Summary is posted as a distinguished, pinned comment
+After installing the app to your subreddit, go to the subreddit's app settings and enter your Gemini API key in the **Gemini API Key** field.
 
-### Manual Trigger
+### 5. Upload the app (development)
 
-To force a summary at any time:
+```bash
+npm run upload
+```
 
-1. Navigate to any post
-2. Click "⋮" menu (three dots)
-3. Select "Summarize Post"
-4. Bot will generate and post the summary
+### 6. Publish the app (production)
 
-## Configuration
-
-### Redis Keys
-
-- `post:{postId}:commentCount` - Comment count (TTL: 7 days)
-- `post:{postId}:summarized` - Summarization flag (TTL: 7 days)
-- `subreddit:{subreddit}:openrouter_key` - API key (no TTL)
-
-### Triggers
-
-- `OnCommentSubmit` - Increment counter, check threshold
-- `/internal/comment-handler` - Internal trigger endpoint
-
-### Menu Item
-
-- **Summarize Post** (Post menu, moderators only)
-  - Manual trigger for immediate summarization
-  - Shows setup prompt if API key not configured
+```bash
+npm run publish
+```
 
 ## Development
 
-### Project Structure
+### Available scripts
+
+| Command | Description |
+|---------|-------------|
+| `npm run dev` | Start Devvit playtest (hot reload to dev subreddit) |
+| `npm run upload` | Upload new version |
+| `npm run publish` | Publish to the Devvit App Directory |
+| `npm run build` | Build only (no upload) |
+| `npm run typecheck` | TypeScript type check |
+| `npm run lint` | ESLint |
+| `npm run lint:fix` | ESLint with auto-fix |
+| `npm run format` | Prettier format |
+| `npm run format:check` | Prettier check (used in CI) |
+| `npm run test` | Run Vitest unit tests |
+
+### Project structure
 
 ```
-devvit-summarizer/
-├── devvit.json                 # Devvit config
+ica-mod-bot/
 ├── src/
-│   ├── server/
-│   │   ├── index.js           # Main entry point (triggers, menu, endpoints)
-│   │   ├── commentHandler.js  # Comment counting & summarization logic
-│   │   ├── summarizer.js      # OpenRouter AI integration
-│   │   └── redditClient.js    # Reddit API helpers
-│   └── shared/
-│       └── prompts.js         # AI prompts
-└── README.md
+│   ├── main.ts              # App entry point — triggers, menu item, Devvit config
+│   ├── helpers.ts           # Pure helper functions (log, comment filtering)
+│   └── __tests__/
+│       └── helpers.test.ts  # Vitest unit tests
+├── .github/workflows/
+│   ├── ci.yml               # Branch push pipeline (lint → test → upload)
+│   └── publish.yml          # Main branch pipeline (lint → test → publish)
+├── devvit.json              # Devvit app manifest and permissions
+├── devvit.yaml              # App metadata
+├── eslint.config.mjs        # ESLint flat config
+├── .prettierrc.json         # Prettier config
+└── vitest.config.ts         # Vitest config
 ```
 
-### Running Locally
+### Key constants (`src/main.ts`)
 
-```bash
-# Install dependencies
-npm install
+| Constant | Value | Description |
+|----------|-------|-------------|
+| `COMMENT_THRESHOLD` | `25` | Comments required to auto-trigger summarization |
+| `MAX_COMMENTS_FOR_SUMMARY` | `50` | Max comments fetched and sent to Gemini |
+| `GEMINI_MODEL` | `gemini-2.5-flash` | Gemini model used for summarization |
 
-# Start Devvit dev server
-devvit start
+### Redis keys
 
-# Test triggers in your dev subreddit
-```
+| Key | TTL | Description |
+|-----|-----|-------------|
+| `summarized:{postId}` | 30 days | Permanent dedup flag set after successful summary |
+| `lock:summarized:{postId}` | 120 seconds | Short-lived atomic lock to prevent race conditions |
 
-### Testing
+## CI/CD
 
-To test the trigger flow:
+### Pipeline overview
 
-1. Create a test post in your dev subreddit
-2. Add 75 comments manually or via script
-3. Watch for summarization trigger in logs
-4. Verify the summary is posted and pinned
+**Every branch push** (except `main`):
+1. Format check → Lint → Typecheck → Test
+2. If all pass: `devvit-cli upload`
 
-To test manual trigger:
+**Merge to `main`**:
+1. Format check → Lint → Typecheck → Test
+2. If all pass: `devvit-cli publish`
 
-1. Click "Summarize Post" menu item on any post
-2. Verify summary is generated and posted
+Pull requests run the quality gate only (no upload — forks don't have secret access).
 
-### Logging
+### Required GitHub secret
 
-The app logs extensively:
+Add a secret named `DEVVIT_TOKEN` to the repository:
 
-```javascript
-console.log(`Post ${postId} now has ${count} comments`);
-console.log(`Generating summary for post ${postId}...`);
-console.log(`Summary comment posted: ${comment.id}`);
-```
+1. On a logged-in developer machine, copy the token:
+   ```bash
+   cat ~/.devvit/token
+   ```
+2. Go to **GitHub repo → Settings → Secrets and variables → Actions → New repository secret**
+3. Name: `DEVVIT_TOKEN`, value: paste the full JSON content from step 1
 
-Check the Devvit console for real-time logs.
+The CI jobs pass this value as the `DEVVIT_AUTH_TOKEN` environment variable, which the Devvit CLI reads directly — no file system write needed.
 
 ## Customization
 
-### Change Comment Threshold
+### Change the comment threshold
 
-Edit `src/server/commentHandler.js`:
+Edit `COMMENT_THRESHOLD` in `src/main.ts`:
 
-```javascript
-// Line ~165
-if (count >= 75) {  // Change 75 to your desired threshold
+```typescript
+const COMMENT_THRESHOLD = 25; // change to your desired value
 ```
 
-### Change AI Model
+### Change the AI model
 
-Edit `src/server/summarizer.js`:
+Edit `GEMINI_MODEL` in `src/main.ts`:
 
-```javascript
-// Line ~38
-model: 'nvidia/nemotron-3-super-120b-a12b:free',  // Change to preferred model
+```typescript
+const GEMINI_MODEL = 'gemini-2.5-flash'; // see https://ai.google.dev/gemini-api/docs/models
 ```
 
-See [OpenRouter models](https://openrouter.ai/models) for options.
+### Customize the prompt
 
-### Customize Summary Prompt
-
-Edit `src/shared/prompts.js`:
-
-```javascript
-const SUMMARY_PROMPT = `Your custom prompt here...`;
-```
-
-### Change Summary Language
-
-Edit the prompt to match your subreddit's primary language:
-
-```javascript
-// For English subreddits:
-const SUMMARY_PROMPT = `...Write in English.`;
-
-// For Spanish subreddits:
-const SUMMARY_PROMPT = `...Escribe en español.`;
-```
+Edit `systemInstruction` inside `performSummary()` in `src/main.ts`.
 
 ## Troubleshooting
 
-### Summarization not triggering
+### Summarization not triggering automatically
 
-1. Check API key is configured
-2. Verify Redis keys exist: `post:{postId}:commentCount`
-3. Check logs for errors
-4. Ensure post hasn't already been summarized (`post:{postId}:summarized`)
+- Verify the Gemini API key is configured in the subreddit's app settings
+- Check Devvit logs (`devvit-cli logs`) for errors
+- Confirm the post hasn't already been summarized (Redis key `summarized:{postId}`)
+- The threshold is 25 comments — ensure the post has reached it
 
-### API key errors
+### Manual trigger works but auto-trigger doesn't
 
-```bash
-# Verify key format
-redis-cli
-> GET subreddit:YOUR_SUBREDDIT:openrouter_key
-# Should start with "sk-or-"
-```
+- This is often a timing issue: the `CommentCreate` event fires before Reddit's comment count is fully updated. The bot performs an authoritative re-fetch of the post to get the live count, but there can be a short delay.
+- Check that `COMMENT_THRESHOLD` in `src/main.ts` matches expectations.
 
-### Comment not posting/pinning
+### CI upload/publish failing with auth error
 
-1. Check bot has moderator permissions
-2. Verify `distinguish` is working
-3. Check Reddit API rate limits
-
-### Redis connection issues
-
-Ensure Redis is accessible:
-```bash
-redis-cli ping
-# Should return PONG
-```
-
-## Security
-
-- API keys stored in Redis (encrypted at rest in production)
-- Setup comments automatically deleted to protect keys
-- Only moderators can configure API keys
-- No keys logged or exposed in error messages
-
-## Cost
-
-OpenRouter model `nvidia/nemotron-3-super-120b-a12b:free` is **free**.
-
-If you switch to a paid model, costs depend on:
-- Number of summaries generated
-- Comment length (token count)
-- Model pricing
-
-Estimate: ~500-1000 tokens per summary × your model's per-token price.
+- Ensure the `DEVVIT_TOKEN` secret is set and contains the full JSON content of `~/.devvit/token`
+- Re-run `devvit-cli login` locally and update the secret with the refreshed token
 
 ## License
 
 MIT
-
-## Contributing
-
-Feel free to fork, modify, and improve this for your community!
-
-## Support
-
-- Devvit Docs: https://developers.reddit.com/
-- OpenRouter Docs: https://openrouter.ai/docs
-- Reddit: r/ItaliaCareerAdvice
-
----
-
-Built with ❤️ for r/ItaliaCareerAdvice

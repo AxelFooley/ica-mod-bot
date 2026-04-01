@@ -49,10 +49,7 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Write Devvit auth token
-        run: |
-          mkdir -p ~/.devvit
-          echo "${{ secrets.DEVVIT_TOKEN }}" > ~/.devvit/token
-
       - name: Publish to Devvit App Directory
         run: npm run publish
+        env:
+          DEVVIT_AUTH_TOKEN: ${{ secrets.DEVVIT_TOKEN }}
