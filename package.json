@@ -4,10 +4,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "devvit build",
-    "dev": "devvit playtest",
-    "upload": "devvit upload",
-    "publish": "devvit publish",
+    "build": "devvit-cli build",
+    "dev": "devvit-cli playtest",
+    "upload": "devvit-cli upload",
+    "publish": "devvit-cli publish",
     "typecheck": "tsc --noEmit",
     "lint": "eslint src/",
     "lint:fix": "eslint src/ --fix",
@@ -19,6 +19,7 @@
     "@devvit/public-api": "0.12.16"
   },
   "devDependencies": {
+    "@devvit/cli": "0.12.17",
     "@devvit/tsconfig": "0.12.16",
     "@eslint/js": "^9.0.0",
     "@typescript-eslint/eslint-plugin": "^8.0.0",
