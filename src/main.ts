@@ -9,8 +9,14 @@ Devvit.configure({
 const COMMENT_THRESHOLD = 25;
 const MAX_COMMENTS_FOR_SUMMARY = 50;
 const GEMINI_MODEL = 'gemini-2.5-flash';
-const GEMINI_URL = (apiKey: string) =>
-  `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`;
+const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
+
+type SummaryResult = 'already_done' | 'no_api_key' | 'api_error' | 'success';
+
+function log(level: 'info' | 'warn' | 'error', msg: string, data?: unknown): void {
+  const entry = JSON.stringify({ level, msg, ...(data !== undefined ? { data } : {}) });
+  level === 'error' ? console.error(entry) : console.log(entry);
+}
 
 // ---------------------------------------------------------------------------
 // Core summarisation logic — runs inside the Devvit Blocks runtime where
@@ -21,30 +27,43 @@ async function performSummary(
   postId: string,
   context: TriggerContext | Devvit.Context,
   force = false,
-): Promise<'already_done' | 'no_api_key' | 'api_error' | 'success'> {
+): Promise<SummaryResult> {
   const redisKey = `summarized:${postId}`;
+  const lockKey = `lock:summarized:${postId}`;
 
   if (!force) {
     const alreadyDone = await context.redis.get(redisKey);
     if (alreadyDone) return 'already_done';
+
+    // Atomic set-if-not-exists — only one invocation proceeds past this point
+    const lockAcquired = await context.redis.set(lockKey, '1', {
+      nx: true,
+      expiration: new Date(Date.now() + 120_000), // 120s covers worst-case retries
+    });
+    if (lockAcquired === null) return 'already_done';
   }
 
-  const thirtyDaysFromNow = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
-  await context.redis.set(redisKey, '1', { expiration: thirtyDaysFromNow });
+  let succeeded = false;
+  try {
+    const post = await context.reddit.getPostById(postId);
 
-  const post = await context.reddit.getPostById(postId);
+    const comments = await context.reddit
+      .getComments({ postId, sort: 'top', pageSize: MAX_COMMENTS_FOR_SUMMARY })
+      .all();
 
-  const comments = await context.reddit
-    .getComments({ postId, sort: 'top', pageSize: MAX_COMMENTS_FOR_SUMMARY })
-    .all();
+    const commentTexts = comments
+      .slice(0, MAX_COMMENTS_FOR_SUMMARY)
+      .filter(
+        (c) =>
+          c.body &&
+          c.body.trim().length > 0 &&
+          c.body.trim() !== '[removed]' &&
+          c.body.trim() !== '[deleted]',
+      )
+      .map((c, i) => `Commento ${i + 1} (${c.score} upvote):\n${c.body!.trim()}`)
+      .join('\n\n---\n\n');
 
-  const commentTexts = comments
-    .slice(0, MAX_COMMENTS_FOR_SUMMARY)
-    .filter((c) => c.body && c.body.trim().length > 0)
-    .map((c, i) => `Commento ${i + 1} (${c.score} upvote):\n${c.body!.trim()}`)
-    .join('\n\n---\n\n');
-
-  const prompt = `Sei un bot che riassume discussioni Reddit in italiano.
+    const systemInstruction = `Sei un bot che riassume discussioni Reddit in italiano.
 
 REGOLE ASSOLUTE — non derogabili:
 - NON scrivere saluti, presentazioni o frasi introduttive (niente "Ciao a tutti", niente "Come moderatore", niente contesto sul post).
@@ -52,54 +71,92 @@ REGOLE ASSOLUTE — non derogabili:
 - Inizia DIRETTAMENTE con i bullet point. Nient'altro prima.
 - Ogni bullet point deve essere conciso (max 2 righe).
 - Usa il formato: "* **Tema**: descrizione"
-- Sii neutrale e oggettivo.
+- Sii neutrale e oggettivo.`;
 
-Titolo del post: "${post.title}"
+    const userContent = `Titolo del post: "${post.title}"
 
 Commenti da riassumere:
 ${commentTexts}`;
 
-  const apiKey = await context.settings.get('gemini-api-key');
-  if (!apiKey) {
-    console.error('No Gemini API key configured');
-    return 'no_api_key';
-  }
+    const apiKey = await context.settings.get('gemini-api-key');
+    if (!apiKey) {
+      log('error', 'No Gemini API key configured');
+      return 'no_api_key';
+    }
 
-  let summary: string;
-  try {
-    const response = await fetch(GEMINI_URL(apiKey as string), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { temperature: 0.5, maxOutputTokens: 8192 },
-      }),
+    const MAX_RETRIES = 2;
+    let summary: string | undefined;
+
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      if (attempt > 0) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 1000 * attempt));
+      }
+
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 30_000);
+
+      try {
+        const response = await fetch(GEMINI_URL, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-goog-api-key': apiKey as string,
+          },
+          body: JSON.stringify({
+            systemInstruction: { parts: [{ text: systemInstruction }] },
+            contents: [{ role: 'user', parts: [{ text: userContent }] }],
+            generationConfig: { temperature: 0.5, maxOutputTokens: 8192 },
+          }),
+          signal: controller.signal,
+        });
+
+        if (!response.ok) {
+          const errorText = await response.text().catch(() => '');
+          log('error', 'Gemini API error', { status: response.status, body: errorText });
+          if (response.status >= 400 && response.status < 500) {
+            return 'api_error'; // 4xx: do not retry
+          }
+          continue; // 5xx: allow retry
+        }
+
+        const data = await response.json();
+        const candidate: string | undefined = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (!candidate || candidate.trim().length < 10) {
+          log('error', 'No usable summary from Gemini', { data: JSON.stringify(data) });
+          return 'api_error';
+        }
+
+        summary = candidate;
+        break;
+      } catch (err) {
+        log('error', 'Gemini fetch failed', { attempt, err: String(err) });
+        if (attempt === MAX_RETRIES) return 'api_error';
+      } finally {
+        clearTimeout(timeoutId);
+      }
+    }
+
+    if (!summary) return 'api_error';
+
+    const botComment = await context.reddit.submitComment({
+      id: postId,
+      text: `**[TL;DR]** Questo post ha raggiunto ${COMMENT_THRESHOLD}+ commenti. Ecco un riassunto generato dall'IA della discussione:\n\nEcco i punti chiave della conversazione:\n\n${summary}\n\n---\n*^(Riassunto generato automaticamente. Potrebbe non catturare tutte le sfumature della discussione.)*`,
     });
 
-    if (!response.ok) {
-      const errorText = await response.text().catch(() => '');
-      console.error(`Gemini API error: ${response.status} ${response.statusText} — ${errorText}`);
-      return 'api_error';
-    }
+    await botComment.distinguish(true);
 
-    const data = await response.json();
-    summary = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!summary) {
-      console.error('No summary returned from Gemini:', JSON.stringify(data));
-      return 'api_error';
+    // Set permanent dedup key only after confirmed success
+    const thirtyDaysFromNow = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+    await context.redis.set(redisKey, '1', { expiration: thirtyDaysFromNow });
+
+    succeeded = true;
+    return 'success';
+  } finally {
+    if (!force && !succeeded) {
+      // Release lock so the next CommentCreate event can retry
+      await context.redis.del(lockKey).catch(() => {});
     }
-  } catch (err) {
-    console.error('Failed to call Gemini API:', err);
-    return 'api_error';
   }
-
-  const botComment = await context.reddit.submitComment({
-    id: postId,
-    text: `**[TL;DR]** Questo post ha raggiunto ${COMMENT_THRESHOLD}+ commenti. Ecco un riassunto generato dall'IA della discussione:\n\nEcco i punti chiave della conversazione:\n\n${summary}\n\n---\n*^(Riassunto generato automaticamente. Potrebbe non catturare tutte le sfumature della discussione.)*`,
-  });
-
-  await botComment.distinguish(true);
-  return 'success';
 }
 
 // ---------------------------------------------------------------------------
@@ -148,15 +205,18 @@ Devvit.addTrigger({
 });
 
 // ---------------------------------------------------------------------------
-// Trigger — post deleted, clean up Redis key
+// Trigger — post deleted, clean up Redis keys
 // ---------------------------------------------------------------------------
 
 Devvit.addTrigger({
   event: 'PostDelete',
   onEvent: async (event, context) => {
     if (event.postId) {
-      await context.redis.del(`summarized:${event.postId}`);
-      console.log(`Cleaned up Redis key for deleted post ${event.postId}`);
+      await Promise.all([
+        context.redis.del(`summarized:${event.postId}`),
+        context.redis.del(`lock:summarized:${event.postId}`),
+      ]);
+      log('info', 'Cleaned up Redis keys for deleted post', { postId: event.postId });
     }
   },
 });
