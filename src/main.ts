@@ -1,12 +1,4 @@
-import { Devvit } from '@devvit/public-api';
-import type { TriggerContext } from '@devvit/public-api';
-
-const COMMENT_THRESHOLD = 5; // TODO: restore to 75 before production deploy
-const MAX_COMMENTS_FOR_SUMMARY = 50;
-const GEMINI_MODEL = 'gemini-2.5-flash';
-// Native Gemini REST API — stable and globally allowlisted by Devvit
-const GEMINI_URL = (apiKey: string) =>
-  `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`;
+import { Devvit, TriggerContext } from '@devvit/public-api';
 
 Devvit.configure({
   redditAPI: true,
@@ -14,21 +6,20 @@ Devvit.configure({
   http: true,
 });
 
-Devvit.addSettings([
-  {
-    name: 'gemini-api-key',
-    label: 'Gemini API Key',
-    type: 'string',
-    scope: 'installation',
-    helpText: 'Your Google Gemini API key (from aistudio.google.com/apikey)',
-  },
-]);
+const COMMENT_THRESHOLD = 75;
+const MAX_COMMENTS_FOR_SUMMARY = 50;
+const GEMINI_MODEL = 'gemini-2.5-flash';
+const GEMINI_URL = (apiKey: string) =>
+  `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`;
 
-// Shared summarization logic used by both the trigger and the menu item.
-// `force` skips the Redis idempotency guard (used for manual mod triggers).
+// ---------------------------------------------------------------------------
+// Core summarisation logic — runs inside the Devvit Blocks runtime where
+// context.redis / context.reddit / context.settings are fully initialised.
+// ---------------------------------------------------------------------------
+
 async function performSummary(
   postId: string,
-  context: Pick<TriggerContext, 'reddit' | 'redis' | 'settings'>,
+  context: TriggerContext | Devvit.Context,
   force = false,
 ): Promise<'already_done' | 'no_api_key' | 'api_error' | 'success'> {
   const redisKey = `summarized:${postId}`;
@@ -38,25 +29,19 @@ async function performSummary(
     if (alreadyDone) return 'already_done';
   }
 
-  // Claim the job before any async work to prevent races.
-  // TTL of 30 days keeps us within Reddit's data-retention policy.
   const thirtyDaysFromNow = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
   await context.redis.set(redisKey, '1', { expiration: thirtyDaysFromNow });
 
-  // Fetch the full Post model for title
   const post = await context.reddit.getPostById(postId);
 
-  // Fetch top comments
-  const comments = await context.reddit.getComments({
-    postId,
-    sort: 'top',
-    pageSize: MAX_COMMENTS_FOR_SUMMARY,
-  }).all();
+  const comments = await context.reddit
+    .getComments({ postId, sort: 'top', pageSize: MAX_COMMENTS_FOR_SUMMARY })
+    .all();
 
   const commentTexts = comments
     .slice(0, MAX_COMMENTS_FOR_SUMMARY)
     .filter((c) => c.body && c.body.trim().length > 0)
-    .map((c, i) => `Commento ${i + 1} (${c.score} upvote):\n${c.body.trim()}`)
+    .map((c, i) => `Commento ${i + 1} (${c.score} upvote):\n${c.body!.trim()}`)
     .join('\n\n---\n\n');
 
   const prompt = `Sei un bot che riassume discussioni Reddit in italiano.
@@ -114,32 +99,47 @@ ${commentTexts}`;
   });
 
   await botComment.distinguish(true);
-
   return 'success';
 }
 
-// Deletion trigger: clean up Redis when a post is deleted (required by Devvit Rules)
-Devvit.addTrigger({
-  event: 'PostDelete',
-  async onEvent(event, context) {
-    const postId = event.postId;
+// ---------------------------------------------------------------------------
+// Menu item — mod manually triggers summary
+// ---------------------------------------------------------------------------
+
+Devvit.addMenuItem({
+  label: 'Summarise this post',
+  location: 'post',
+  forUserType: 'moderator',
+  onPress: async (event, context) => {
+    const postId = event.targetId;
     if (!postId) return;
-    await context.redis.del(`summarized:${postId}`);
-    console.log(`Cleaned up Redis key for deleted post ${postId}`);
+
+    const result = await performSummary(postId, context, true);
+
+    if (result === 'no_api_key') {
+      context.ui.showToast('Errore: API key Gemini non configurata.');
+    } else if (result === 'api_error') {
+      context.ui.showToast('Errore nella chiamata AI. Controlla i log.');
+    } else {
+      context.ui.showToast('Riassunto pubblicato con successo!');
+    }
   },
 });
 
-// Automatic trigger: fires on every new comment
+// ---------------------------------------------------------------------------
+// Trigger — new comment, check threshold and summarise
+// ---------------------------------------------------------------------------
+
 Devvit.addTrigger({
   event: 'CommentCreate',
-  async onEvent(event, context) {
+  onEvent: async (event, context) => {
     const postId = event.comment?.postId;
     if (!postId) return;
 
-    // Quick bail using event payload before making any API calls
+    // Fast pre-check from event payload (avoids an extra API call if clearly below threshold)
     if ((event.post?.numComments ?? 0) < COMMENT_THRESHOLD) return;
 
-    // Authoritative check with fresh data from the API
+    // Authoritative check with a fresh fetch
     const post = await context.reddit.getPostById(postId);
     if (post.numberOfComments < COMMENT_THRESHOLD) return;
 
@@ -147,27 +147,16 @@ Devvit.addTrigger({
   },
 });
 
-// Manual trigger: mod-only post menu item for testing
-Devvit.addMenuItem({
-  label: 'Summarise this post',
-  location: 'post',
-  forUserType: 'moderator',
-  async onPress(event, context) {
-    const postId = event.targetId;
+// ---------------------------------------------------------------------------
+// Trigger — post deleted, clean up Redis key
+// ---------------------------------------------------------------------------
 
-    context.ui.showToast('Generating summary, please wait...');
-
-    // force=true bypasses the Redis guard so mods can re-trigger at any time
-    const result = await performSummary(postId, context, true);
-
-    if (result === 'already_done') {
-      context.ui.showToast('Already summarized (this should not appear in forced mode).');
-    } else if (result === 'no_api_key') {
-      context.ui.showToast('Error: Gemini API key not configured.');
-    } else if (result === 'api_error') {
-      context.ui.showToast('Error calling the AI API. Check the logs.');
-    } else {
-      context.ui.showToast('Summary posted successfully!');
+Devvit.addTrigger({
+  event: 'PostDelete',
+  onEvent: async (event, context) => {
+    if (event.postId) {
+      await context.redis.del(`summarized:${event.postId}`);
+      console.log(`Cleaned up Redis key for deleted post ${event.postId}`);
     }
   },
 });

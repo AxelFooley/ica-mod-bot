@@ -1,12 +1,25 @@
 {
   "$schema": "https://developers.reddit.com/schema/config-file.v1.json",
   "name": "ica-mod-bot",
-  "server": {
-    "entry": "src/main.ts",
-    "dir": "dist/server"
+  "blocks": {
+    "entry": "src/main.ts"
   },
   "permissions": {
-    "redis": true
+    "redis": true,
+    "reddit": true,
+    "http": {
+      "enable": true,
+      "domains": ["generativelanguage.googleapis.com"]
+    }
+  },
+  "settings": {
+    "subreddit": {
+      "gemini-api-key": {
+        "type": "string",
+        "label": "Gemini API Key",
+        "helpText": "Your Google Gemini API key (from aistudio.google.com/apikey)"
+      }
+    }
   },
   "dev": {
     "subreddit": "ica_mod_bot_dev"
