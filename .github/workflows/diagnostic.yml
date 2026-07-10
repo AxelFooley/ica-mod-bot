@@ -1,0 +1,30 @@
+name: Diagnostic — List Installs
+
+on:
+  workflow_dispatch:
+
+jobs:
+  diagnostic:
+    name: List installs and app info
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: List installs
+        run: npx devvit-cli list installs ItaliaCareerAdvice
+        env:
+          DEVVIT_AUTH_TOKEN: ${{ secrets.DEVVIT_TOKEN }}
+
+      - name: View latest app version
+        run: npx devvit-cli view ica-mod-bot
+        env:
+          DEVVIT_AUTH_TOKEN: ${{ secrets.DEVVIT_TOKEN }}
