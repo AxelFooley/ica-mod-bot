@@ -28,6 +28,7 @@ jobs:
         run: npx devvit-cli publish --bump patch
         env:
           DEVVIT_AUTH_TOKEN: ${{ secrets.DEVVIT_TOKEN }}
+          DEVVIT_ALLOW_SOURCE_UPLOAD: '1'
 
       - name: Install/update on target subreddit
         run: npx devvit-cli install "${{ github.event.inputs.subreddit }}"
