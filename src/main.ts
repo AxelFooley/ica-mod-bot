@@ -241,11 +241,26 @@ Devvit.addTrigger({
     // the trigger runtime — a real blind spot given how unreliable remote
     // log delivery has been while diagnosing this bot.
     try {
-      const postId = event.comment?.postId;
-      if (!postId) {
+      const rawPostId = event.comment?.postId;
+      if (!rawPostId) {
         log('info', 'CommentCreate: no postId on event, skipping');
         return;
       }
+
+      // CommentV2.postId comes from the raw trigger payload, which — unlike
+      // event.targetId in the menu-action path (already a fullname) — may be
+      // a bare base36 ID with no "t3_" prefix (PostV2.id is stored bare too;
+      // see the id field in this same protobuf family). getPostById requires
+      // a fullname, so normalize defensively rather than assume the format.
+      const postId = rawPostId.startsWith('t3_') ? rawPostId : `t3_${rawPostId}`;
+      log('info', 'CommentCreate: raw event fields', {
+        rawPostId,
+        normalizedPostId: postId,
+        commentId: event.comment?.id,
+        postFromEvent: event.post
+          ? { id: event.post.id, numComments: event.post.numComments }
+          : null,
+      });
 
       // Always fetch fresh — the event payload's post.numComments field is not
       // reliably populated by Reddit's trigger delivery, and using it as a fast
