@@ -1,5 +1,5 @@
 import { Devvit, TriggerContext } from '@devvit/public-api';
-import { log, buildCommentTexts } from './helpers.js';
+import { log, buildCommentTexts, currentMilestone, SUMMARY_INTERVAL } from './helpers.js';
 
 Devvit.configure({
   redditAPI: true,
@@ -7,8 +7,6 @@ Devvit.configure({
   http: true,
 });
 
-const COMMENT_THRESHOLD = 25;
-const MAX_COMMENTS_FOR_SUMMARY = 50;
 const GEMINI_MODEL = 'gemini-2.5-flash';
 const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
 
@@ -22,14 +20,17 @@ type SummaryResult = 'already_done' | 'no_api_key' | 'api_error' | 'success';
 async function performSummary(
   postId: string,
   context: TriggerContext | Devvit.Context,
+  milestone: number,
   force = false,
 ): Promise<SummaryResult> {
-  const redisKey = `summarized:${postId}`;
-  const lockKey = `lock:summarized:${postId}`;
+  const milestoneKey = `lastMilestone:${postId}`;
+  const commentIdKey = `summaryCommentId:${postId}`;
+  const lockKey = `lock:${postId}`;
 
   if (!force) {
-    const alreadyDone = await context.redis.get(redisKey);
-    if (alreadyDone) return 'already_done';
+    const lastMilestoneRaw = await context.redis.get(milestoneKey);
+    const lastMilestone = lastMilestoneRaw ? Number(lastMilestoneRaw) : 0;
+    if (milestone <= lastMilestone) return 'already_done';
 
     // Atomic set-if-not-exists — only one invocation proceeds past this point
     const lockAcquired = await context.redis.set(lockKey, '1', {
@@ -43,21 +44,19 @@ async function performSummary(
   try {
     const post = await context.reddit.getPostById(postId);
 
-    const comments = await context.reddit
-      .getComments({ postId, sort: 'top', pageSize: MAX_COMMENTS_FOR_SUMMARY })
-      .all();
+    const comments = await context.reddit.getComments({ postId, sort: 'top' }).all();
 
-    const commentTexts = buildCommentTexts(comments.slice(0, MAX_COMMENTS_FOR_SUMMARY));
+    const commentTexts = buildCommentTexts(comments);
 
-    const systemInstruction = `Sei un bot che riassume discussioni Reddit in italiano.
+    const systemInstruction = `Sei un utente esperto della community che racconta a un amico com'è andata una discussione su Reddit, in italiano.
 
-REGOLE ASSOLUTE — non derogabili:
-- NON scrivere saluti, presentazioni o frasi introduttive (niente "Ciao a tutti", niente "Come moderatore", niente contesto sul post).
-- NON scrivere conclusioni o auguri finali (niente "Spero che...", niente "Continuate a...", niente ringraziamenti).
-- Inizia DIRETTAMENTE con i bullet point. Nient'altro prima.
-- Ogni bullet point deve essere conciso (max 2 righe).
-- Usa il formato: "* **Tema**: descrizione"
-- Sii neutrale e oggettivo.`;
+REGOLE:
+- Scrivi in prosa scorrevole, 2-4 brevi paragrafi. NIENTE elenchi puntati, NIENTE titoli in grassetto per ogni punto.
+- Tono casual e colloquiale, come una chiacchierata tra amici — evita linguaggio burocratico o da comunicato stampa.
+- NON scrivere saluti o presentazioni (niente "Ciao a tutti", niente "Come moderatore"). Vai dritto al racconto.
+- NON scrivere conclusioni tipo "Spero sia utile" o ringraziamenti finali.
+- Copri i temi principali emersi, le opinioni più condivise e gli eventuali disaccordi interessanti.
+- Sii neutrale sui contenuti (non prendere posizione), ma resta informale nel modo di scrivere.`;
 
     const userContent = `Titolo del post: "${post.title}"
 
@@ -124,16 +123,22 @@ ${commentTexts}`;
 
     if (!summary) return 'api_error';
 
-    const botComment = await context.reddit.submitComment({
-      id: postId,
-      text: `**[TL;DR]** Questo post ha raggiunto ${COMMENT_THRESHOLD}+ commenti. Ecco un riassunto generato dall'IA della discussione:\n\nEcco i punti chiave della conversazione:\n\n${summary}\n\n---\n*^(Riassunto generato automaticamente. Potrebbe non catturare tutte le sfumature della discussione.)*`,
-    });
+    const commentBody = `**[TL;DR]** ${summary}\n\n---\n*^(Riassunto generato dall'IA e aggiornato automaticamente man mano che la discussione cresce — copre ${comments.length} commenti finora.)*`;
 
-    await botComment.distinguish(true);
-
-    // Set permanent dedup key only after confirmed success
     const thirtyDaysFromNow = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
-    await context.redis.set(redisKey, '1', { expiration: thirtyDaysFromNow });
+    const existingCommentId = await context.redis.get(commentIdKey);
+
+    if (existingCommentId) {
+      const existingComment = await context.reddit.getCommentById(existingCommentId);
+      await existingComment.edit({ text: commentBody });
+    } else {
+      const botComment = await context.reddit.submitComment({ id: postId, text: commentBody });
+      await botComment.distinguish(true);
+      await context.redis.set(commentIdKey, botComment.id, { expiration: thirtyDaysFromNow });
+    }
+
+    // Set dedup key only after confirmed success
+    await context.redis.set(milestoneKey, String(milestone), { expiration: thirtyDaysFromNow });
 
     succeeded = true;
     return 'success';
@@ -157,7 +162,9 @@ Devvit.addMenuItem({
     const postId = event.targetId;
     if (!postId) return;
 
-    const result = await performSummary(postId, context, true);
+    const post = await context.reddit.getPostById(postId);
+    const milestone = currentMilestone(post.numberOfComments);
+    const result = await performSummary(postId, context, milestone, true);
 
     if (result === 'no_api_key') {
       context.ui.showToast('Errore: API key Gemini non configurata.');
@@ -179,14 +186,15 @@ Devvit.addTrigger({
     const postId = event.comment?.postId;
     if (!postId) return;
 
-    // Fast pre-check from event payload (avoids an extra API call if clearly below threshold)
-    if ((event.post?.numComments ?? 0) < COMMENT_THRESHOLD) return;
+    // Fast pre-check from event payload (avoids an extra API call if clearly below the first milestone)
+    if ((event.post?.numComments ?? 0) < SUMMARY_INTERVAL) return;
 
     // Authoritative check with a fresh fetch
     const post = await context.reddit.getPostById(postId);
-    if (post.numberOfComments < COMMENT_THRESHOLD) return;
+    const milestone = currentMilestone(post.numberOfComments);
+    if (milestone < SUMMARY_INTERVAL) return;
 
-    await performSummary(postId, context);
+    await performSummary(postId, context, milestone);
   },
 });
 
@@ -199,8 +207,9 @@ Devvit.addTrigger({
   onEvent: async (event, context) => {
     if (event.postId) {
       await Promise.all([
-        context.redis.del(`summarized:${event.postId}`),
-        context.redis.del(`lock:summarized:${event.postId}`),
+        context.redis.del(`lastMilestone:${event.postId}`),
+        context.redis.del(`summaryCommentId:${event.postId}`),
+        context.redis.del(`lock:${event.postId}`),
       ]);
       log('info', 'Cleaned up Redis keys for deleted post', { postId: event.postId });
     }

@@ -22,3 +22,10 @@ export function buildCommentTexts(comments: CommentLike[]): string {
     .map((c, i) => `Commento ${i + 1} (${c.score} upvote):\n${c.body!.trim()}`)
     .join('\n\n---\n\n');
 }
+
+export const SUMMARY_INTERVAL = 25;
+
+/** Rounds a comment count down to the most recent multiple of `interval`. */
+export function currentMilestone(numComments: number, interval: number = SUMMARY_INTERVAL): number {
+  return Math.floor(numComments / interval) * interval;
+}

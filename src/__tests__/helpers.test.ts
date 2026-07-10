@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { log, isUsableComment, buildCommentTexts } from '../helpers.js';
+import {
+  log,
+  isUsableComment,
+  buildCommentTexts,
+  currentMilestone,
+  SUMMARY_INTERVAL,
+} from '../helpers.js';
 
 // ---------------------------------------------------------------------------
 // log()
@@ -141,5 +147,35 @@ describe('buildCommentTexts', () => {
     expect(result).toContain('Commento 1 (100 upvote)');
     expect(result).toContain('Commento 2 (50 upvote)');
     expect(result).not.toContain('Commento 3');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// currentMilestone()
+// ---------------------------------------------------------------------------
+describe('currentMilestone', () => {
+  it('defaults to the 25-comment interval', () => {
+    expect(SUMMARY_INTERVAL).toBe(25);
+  });
+
+  it('returns 0 below the first interval', () => {
+    expect(currentMilestone(0)).toBe(0);
+    expect(currentMilestone(24)).toBe(0);
+  });
+
+  it('returns the interval exactly at the boundary', () => {
+    expect(currentMilestone(25)).toBe(25);
+    expect(currentMilestone(50)).toBe(50);
+  });
+
+  it('rounds down to the most recent milestone between boundaries', () => {
+    expect(currentMilestone(49)).toBe(25);
+    expect(currentMilestone(74)).toBe(50);
+    expect(currentMilestone(999)).toBe(975);
+  });
+
+  it('supports a custom interval', () => {
+    expect(currentMilestone(30, 10)).toBe(30);
+    expect(currentMilestone(35, 10)).toBe(30);
   });
 });

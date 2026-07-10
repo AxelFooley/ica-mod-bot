@@ -1,15 +1,16 @@
 # ica-mod-bot
 
-AI-powered post summarizer for Reddit, built with [Devvit](https://developers.reddit.com/). Automatically summarizes posts when they reach a comment threshold using Google Gemini.
+AI-powered post summarizer for Reddit, built with [Devvit](https://developers.reddit.com/). Automatically (re)summarizes posts every 25 comments using Google Gemini, in a casual, conversational tone.
 
 ## Features
 
-- **Auto-trigger**: Summarizes posts at 25 comments automatically
-- **Italian language**: Optimized for r/ItaliaCareerAdvice
-- **Pinned summaries**: Posts summaries as distinguished mod comments
-- **Manual trigger**: Moderators can force summarization via the post menu
+- **Repeating auto-trigger**: Summarizes posts at every 25-comment milestone (25, 50, 75, 100, …)
+- **Italian language, casual tone**: Written like a friend recapping the thread, not a bulleted report — optimized for r/ItaliaCareerAdvice
+- **Single updating comment**: Each new milestone edits the same distinguished, stickied comment instead of posting a new one — no thread spam
+- **Whole-thread coverage**: No cap on how many comments are fed to the summary — it covers the entire discussion, however large
+- **Manual trigger**: Moderators can force a refresh via the post menu at any time
 - **Per-subreddit config**: Each subreddit manages its own Gemini API key
-- **Deduplication**: Each post is summarized only once (atomic Redis lock)
+- **Deduplication**: A given milestone is only ever summarized once (atomic Redis lock)
 
 ## Prerequisites
 
@@ -91,20 +92,22 @@ ica-mod-bot/
 └── vitest.config.ts         # Vitest config
 ```
 
-### Key constants (`src/main.ts`)
+### Key constants
 
-| Constant | Value | Description |
-|----------|-------|-------------|
-| `COMMENT_THRESHOLD` | `25` | Comments required to auto-trigger summarization |
-| `MAX_COMMENTS_FOR_SUMMARY` | `50` | Max comments fetched and sent to Gemini |
-| `GEMINI_MODEL` | `gemini-2.5-flash` | Gemini model used for summarization |
+| Constant | Location | Value | Description |
+|----------|----------|-------|-------------|
+| `SUMMARY_INTERVAL` | `src/helpers.ts` | `25` | Comment interval that triggers a (re)summary — 25, 50, 75, … |
+| `GEMINI_MODEL` | `src/main.ts` | `gemini-2.5-flash` | Gemini model used for summarization |
+
+There is no cap on how many comments are fetched or sent to Gemini — the whole thread is summarized every time.
 
 ### Redis keys
 
 | Key | TTL | Description |
 |-----|-----|-------------|
-| `summarized:{postId}` | 30 days | Permanent dedup flag set after successful summary |
-| `lock:summarized:{postId}` | 120 seconds | Short-lived atomic lock to prevent race conditions |
+| `lastMilestone:{postId}` | 30 days | Highest comment milestone already summarized |
+| `summaryCommentId:{postId}` | 30 days | Id of the bot's summary comment, so later milestones edit it in place |
+| `lock:{postId}` | 120 seconds | Short-lived atomic lock to prevent race conditions |
 
 ## CI/CD
 
@@ -135,12 +138,12 @@ The CI jobs pass this value as the `DEVVIT_AUTH_TOKEN` environment variable, whi
 
 ## Customization
 
-### Change the comment threshold
+### Change the milestone interval
 
-Edit `COMMENT_THRESHOLD` in `src/main.ts`:
+Edit `SUMMARY_INTERVAL` in `src/helpers.ts`:
 
 ```typescript
-const COMMENT_THRESHOLD = 25; // change to your desired value
+export const SUMMARY_INTERVAL = 25; // change to your desired interval
 ```
 
 ### Change the AI model
@@ -161,13 +164,13 @@ Edit `systemInstruction` inside `performSummary()` in `src/main.ts`.
 
 - Verify the Gemini API key is configured in the subreddit's app settings
 - Check Devvit logs (`devvit-cli logs`) for errors
-- Confirm the post hasn't already been summarized (Redis key `summarized:{postId}`)
-- The threshold is 25 comments — ensure the post has reached it
+- Confirm the post hasn't already been summarized at this milestone (Redis key `lastMilestone:{postId}`)
+- Milestones are every 25 comments — ensure the post has crossed the next one
 
 ### Manual trigger works but auto-trigger doesn't
 
 - This is often a timing issue: the `CommentCreate` event fires before Reddit's comment count is fully updated. The bot performs an authoritative re-fetch of the post to get the live count, but there can be a short delay.
-- Check that `COMMENT_THRESHOLD` in `src/main.ts` matches expectations.
+- Check that `SUMMARY_INTERVAL` in `src/helpers.ts` matches expectations.
 
 ### CI upload/publish failing with auth error
 
