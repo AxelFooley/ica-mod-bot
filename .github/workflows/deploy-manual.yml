@@ -1,0 +1,35 @@
+name: Manual Deploy — Publish & Install
+
+on:
+  workflow_dispatch:
+    inputs:
+      subreddit:
+        description: 'Subreddit to install/update the new version on'
+        required: true
+        default: 'ItaliaCareerAdvice'
+
+jobs:
+  deploy:
+    name: Publish (unlisted) and install
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node 18
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Publish new version (unlisted)
+        run: npx devvit-cli publish --bump patch
+        env:
+          DEVVIT_AUTH_TOKEN: ${{ secrets.DEVVIT_TOKEN }}
+
+      - name: Install/update on target subreddit
+        run: npx devvit-cli install "${{ github.event.inputs.subreddit }}"
+        env:
+          DEVVIT_AUTH_TOKEN: ${{ secrets.DEVVIT_TOKEN }}
