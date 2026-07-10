@@ -128,10 +128,23 @@ ${commentTexts}`;
     const thirtyDaysFromNow = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
     const existingCommentId = await context.redis.get(commentIdKey);
 
+    let editedExisting = false;
     if (existingCommentId) {
-      const existingComment = await context.reddit.getCommentById(existingCommentId);
-      await existingComment.edit({ text: commentBody });
-    } else {
+      try {
+        const existingComment = await context.reddit.getCommentById(existingCommentId);
+        await existingComment.edit({ text: commentBody });
+        editedExisting = true;
+      } catch (err) {
+        // Comment was likely removed/deleted since — fall back to posting a fresh one.
+        log('warn', 'Failed to edit existing summary comment, posting a new one', {
+          postId,
+          existingCommentId,
+          err: String(err),
+        });
+      }
+    }
+
+    if (!editedExisting) {
       const botComment = await context.reddit.submitComment({ id: postId, text: commentBody });
       await botComment.distinguish(true);
       await context.redis.set(commentIdKey, botComment.id, { expiration: thirtyDaysFromNow });
