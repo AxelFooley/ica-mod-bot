@@ -236,32 +236,44 @@ Devvit.addMenuItem({
 Devvit.addTrigger({
   event: 'CommentCreate',
   onEvent: async (event, context) => {
-    const postId = event.comment?.postId;
-    if (!postId) {
-      log('info', 'CommentCreate: no postId on event, skipping');
-      return;
+    // The whole handler is wrapped so any unexpected exception (Reddit API
+    // error, Redis error, etc.) is logged instead of silently swallowed by
+    // the trigger runtime — a real blind spot given how unreliable remote
+    // log delivery has been while diagnosing this bot.
+    try {
+      const postId = event.comment?.postId;
+      if (!postId) {
+        log('info', 'CommentCreate: no postId on event, skipping');
+        return;
+      }
+
+      // Always fetch fresh — the event payload's post.numComments field is not
+      // reliably populated by Reddit's trigger delivery, and using it as a fast
+      // pre-check silently short-circuited every automatic summary (never called
+      // performSummary regardless of real comment count). One extra API call per
+      // comment is cheap; a silently-broken monitor is not.
+      const post = await context.reddit.getPostById(postId);
+      const milestone = currentMilestone(post.numberOfComments);
+      log('info', 'CommentCreate received', {
+        postId,
+        numComments: post.numberOfComments,
+        milestone,
+      });
+
+      if (milestone < SUMMARY_INTERVAL) {
+        log('info', 'CommentCreate: below first milestone, skipping', { postId, milestone });
+        return;
+      }
+
+      const result = await performSummary(postId, context, milestone);
+      log('info', 'CommentCreate: performSummary result', { postId, milestone, result });
+    } catch (err) {
+      log('error', 'CommentCreate: unhandled exception in trigger handler', {
+        postId: event.comment?.postId,
+        err: String(err),
+        stack: err instanceof Error ? err.stack : undefined,
+      });
     }
-
-    // Always fetch fresh — the event payload's post.numComments field is not
-    // reliably populated by Reddit's trigger delivery, and using it as a fast
-    // pre-check silently short-circuited every automatic summary (never called
-    // performSummary regardless of real comment count). One extra API call per
-    // comment is cheap; a silently-broken monitor is not.
-    const post = await context.reddit.getPostById(postId);
-    const milestone = currentMilestone(post.numberOfComments);
-    log('info', 'CommentCreate received', {
-      postId,
-      numComments: post.numberOfComments,
-      milestone,
-    });
-
-    if (milestone < SUMMARY_INTERVAL) {
-      log('info', 'CommentCreate: below first milestone, skipping', { postId, milestone });
-      return;
-    }
-
-    const result = await performSummary(postId, context, milestone);
-    log('info', 'CommentCreate: performSummary result', { postId, milestone, result });
   },
 });
 
