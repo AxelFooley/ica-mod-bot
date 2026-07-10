@@ -1,0 +1,42 @@
+name: Fetch Devvit Logs
+
+on:
+  workflow_dispatch:
+    inputs:
+      subreddit:
+        description: 'Subreddit to fetch logs from'
+        required: true
+        default: 'ItaliaCareerAdvice'
+      since:
+        description: 'How far back to fetch logs (e.g. 30m, 1h)'
+        required: true
+        default: '30m'
+      duration:
+        description: 'How many seconds to stream before stopping'
+        required: true
+        default: '45'
+
+jobs:
+  fetch-logs:
+    name: Stream and capture logs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Stream logs (time-bounded)
+        run: |
+          timeout "${{ github.event.inputs.duration }}"s \
+            npx devvit-cli logs "${{ github.event.inputs.subreddit }}" \
+            --since "${{ github.event.inputs.since }}" \
+            --show-timestamps || true
+        env:
+          DEVVIT_AUTH_TOKEN: ${{ secrets.DEVVIT_TOKEN }}
