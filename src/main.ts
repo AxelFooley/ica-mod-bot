@@ -233,62 +233,79 @@ Devvit.addMenuItem({
 // Trigger — new comment, check threshold and summarise
 // ---------------------------------------------------------------------------
 
+async function handleNewComment(
+  source: 'CommentCreate' | 'CommentSubmit',
+  rawPostId: string | undefined,
+  commentId: string | undefined,
+  context: TriggerContext,
+): Promise<void> {
+  // The whole handler is wrapped so any unexpected exception (Reddit API
+  // error, Redis error, etc.) is logged instead of silently swallowed by
+  // the trigger runtime — a real blind spot given how unreliable remote
+  // log delivery has been while diagnosing this bot.
+  try {
+    if (!rawPostId) {
+      log('info', `${source}: no postId on event, skipping`);
+      return;
+    }
+
+    // CommentV2.postId comes from the raw trigger payload, which — unlike
+    // event.targetId in the menu-action path (already a fullname) — may be
+    // a bare base36 ID with no "t3_" prefix (PostV2.id is stored bare too;
+    // see the id field in this same protobuf family). getPostById requires
+    // a fullname, so normalize defensively rather than assume the format.
+    const postId = rawPostId.startsWith('t3_') ? rawPostId : `t3_${rawPostId}`;
+    log('info', `${source}: raw event fields`, {
+      source,
+      rawPostId,
+      normalizedPostId: postId,
+      commentId,
+    });
+
+    // Always fetch fresh — the event payload's post.numComments field is not
+    // reliably populated by Reddit's trigger delivery, and using it as a fast
+    // pre-check silently short-circuited every automatic summary (never called
+    // performSummary regardless of real comment count). One extra API call per
+    // comment is cheap; a silently-broken monitor is not.
+    const post = await context.reddit.getPostById(postId);
+    const milestone = currentMilestone(post.numberOfComments);
+    log('info', `${source}: received`, { postId, numComments: post.numberOfComments, milestone });
+
+    if (milestone < SUMMARY_INTERVAL) {
+      log('info', `${source}: below first milestone, skipping`, { postId, milestone });
+      return;
+    }
+
+    const result = await performSummary(postId, context, milestone);
+    log('info', `${source}: performSummary result`, { postId, milestone, result });
+  } catch (err) {
+    log('error', `${source}: unhandled exception in trigger handler`, {
+      postId: rawPostId,
+      err: String(err),
+      stack: err instanceof Error ? err.stack : undefined,
+    });
+  }
+}
+
+// Registered for both CommentCreate and CommentSubmit — Devvit exposes both
+// as distinct trigger types with identical payload shapes, and it is not
+// certain which one is reliably delivered to a Blocks-model app (the old,
+// pre-rewrite app used the newer "server" model's explicit onCommentCreate
+// endpoint config, a different registration mechanism entirely). Firing
+// twice for the same comment is harmless: performSummary's Redis
+// lock+milestone check makes concurrent/duplicate invocations idempotent.
+
 Devvit.addTrigger({
   event: 'CommentCreate',
   onEvent: async (event, context) => {
-    // The whole handler is wrapped so any unexpected exception (Reddit API
-    // error, Redis error, etc.) is logged instead of silently swallowed by
-    // the trigger runtime — a real blind spot given how unreliable remote
-    // log delivery has been while diagnosing this bot.
-    try {
-      const rawPostId = event.comment?.postId;
-      if (!rawPostId) {
-        log('info', 'CommentCreate: no postId on event, skipping');
-        return;
-      }
+    await handleNewComment('CommentCreate', event.comment?.postId, event.comment?.id, context);
+  },
+});
 
-      // CommentV2.postId comes from the raw trigger payload, which — unlike
-      // event.targetId in the menu-action path (already a fullname) — may be
-      // a bare base36 ID with no "t3_" prefix (PostV2.id is stored bare too;
-      // see the id field in this same protobuf family). getPostById requires
-      // a fullname, so normalize defensively rather than assume the format.
-      const postId = rawPostId.startsWith('t3_') ? rawPostId : `t3_${rawPostId}`;
-      log('info', 'CommentCreate: raw event fields', {
-        rawPostId,
-        normalizedPostId: postId,
-        commentId: event.comment?.id,
-        postFromEvent: event.post
-          ? { id: event.post.id, numComments: event.post.numComments }
-          : null,
-      });
-
-      // Always fetch fresh — the event payload's post.numComments field is not
-      // reliably populated by Reddit's trigger delivery, and using it as a fast
-      // pre-check silently short-circuited every automatic summary (never called
-      // performSummary regardless of real comment count). One extra API call per
-      // comment is cheap; a silently-broken monitor is not.
-      const post = await context.reddit.getPostById(postId);
-      const milestone = currentMilestone(post.numberOfComments);
-      log('info', 'CommentCreate received', {
-        postId,
-        numComments: post.numberOfComments,
-        milestone,
-      });
-
-      if (milestone < SUMMARY_INTERVAL) {
-        log('info', 'CommentCreate: below first milestone, skipping', { postId, milestone });
-        return;
-      }
-
-      const result = await performSummary(postId, context, milestone);
-      log('info', 'CommentCreate: performSummary result', { postId, milestone, result });
-    } catch (err) {
-      log('error', 'CommentCreate: unhandled exception in trigger handler', {
-        postId: event.comment?.postId,
-        err: String(err),
-        stack: err instanceof Error ? err.stack : undefined,
-      });
-    }
+Devvit.addTrigger({
+  event: 'CommentSubmit',
+  onEvent: async (event, context) => {
+    await handleNewComment('CommentSubmit', event.comment?.postId, event.comment?.id, context);
   },
 });
 
