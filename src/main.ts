@@ -13,6 +13,26 @@ const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GE
 type SummaryResult = 'already_done' | 'no_api_key' | 'api_error' | 'success';
 
 // ---------------------------------------------------------------------------
+// getComments().all() only returns top-level comments — each one carries its
+// own nested `.replies` listing that has to be walked separately to reach
+// the full tree, since Reddit threads are usually mostly nested replies.
+// ---------------------------------------------------------------------------
+
+async function flattenComments<T extends { replies: { all(): Promise<T[]> } }>(
+  comments: T[],
+): Promise<T[]> {
+  const all: T[] = [];
+  for (const comment of comments) {
+    all.push(comment);
+    const replies = await comment.replies.all();
+    if (replies.length) {
+      all.push(...(await flattenComments(replies)));
+    }
+  }
+  return all;
+}
+
+// ---------------------------------------------------------------------------
 // Core summarisation logic — runs inside the Devvit Blocks runtime where
 // context.redis / context.reddit / context.settings are fully initialised.
 // ---------------------------------------------------------------------------
@@ -44,7 +64,8 @@ async function performSummary(
   try {
     const post = await context.reddit.getPostById(postId);
 
-    const comments = await context.reddit.getComments({ postId, sort: 'top' }).all();
+    const topLevelComments = await context.reddit.getComments({ postId, sort: 'top' }).all();
+    const comments = await flattenComments(topLevelComments);
 
     const commentTexts = buildCommentTexts(comments);
 
