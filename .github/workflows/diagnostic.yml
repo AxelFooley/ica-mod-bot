@@ -1,0 +1,25 @@
+name: Diagnostic — Settings
+
+on:
+  workflow_dispatch:
+
+jobs:
+  diagnostic:
+    name: Check app settings
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: List settings
+        run: npx devvit-cli settings list
+        env:
+          DEVVIT_AUTH_TOKEN: ${{ secrets.DEVVIT_TOKEN }}
