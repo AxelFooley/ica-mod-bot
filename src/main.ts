@@ -50,14 +50,27 @@ async function performSummary(
   if (!force) {
     const lastMilestoneRaw = await context.redis.get(milestoneKey);
     const lastMilestone = lastMilestoneRaw ? Number(lastMilestoneRaw) : 0;
-    if (milestone <= lastMilestone) return 'already_done';
+    if (milestone <= lastMilestone) {
+      log('info', 'performSummary: milestone already summarized, skipping', {
+        postId,
+        milestone,
+        lastMilestone,
+      });
+      return 'already_done';
+    }
 
     // Atomic set-if-not-exists — only one invocation proceeds past this point
     const lockAcquired = await context.redis.set(lockKey, '1', {
       nx: true,
       expiration: new Date(Date.now() + 120_000), // 120s covers worst-case retries
     });
-    if (lockAcquired === null) return 'already_done';
+    if (lockAcquired === null) {
+      log('info', 'performSummary: lock held by concurrent invocation, skipping', {
+        postId,
+        milestone,
+      });
+      return 'already_done';
+    }
   }
 
   let succeeded = false;
@@ -175,6 +188,12 @@ ${commentTexts}`;
     await context.redis.set(milestoneKey, String(milestone), { expiration: thirtyDaysFromNow });
 
     succeeded = true;
+    log('info', 'performSummary: posted summary successfully', {
+      postId,
+      milestone,
+      editedExisting,
+      commentCount: comments.length,
+    });
     return 'success';
   } finally {
     if (!force && !succeeded) {
@@ -218,17 +237,31 @@ Devvit.addTrigger({
   event: 'CommentCreate',
   onEvent: async (event, context) => {
     const postId = event.comment?.postId;
-    if (!postId) return;
+    if (!postId) {
+      log('info', 'CommentCreate: no postId on event, skipping');
+      return;
+    }
 
-    // Fast pre-check from event payload (avoids an extra API call if clearly below the first milestone)
-    if ((event.post?.numComments ?? 0) < SUMMARY_INTERVAL) return;
-
-    // Authoritative check with a fresh fetch
+    // Always fetch fresh — the event payload's post.numComments field is not
+    // reliably populated by Reddit's trigger delivery, and using it as a fast
+    // pre-check silently short-circuited every automatic summary (never called
+    // performSummary regardless of real comment count). One extra API call per
+    // comment is cheap; a silently-broken monitor is not.
     const post = await context.reddit.getPostById(postId);
     const milestone = currentMilestone(post.numberOfComments);
-    if (milestone < SUMMARY_INTERVAL) return;
+    log('info', 'CommentCreate received', {
+      postId,
+      numComments: post.numberOfComments,
+      milestone,
+    });
 
-    await performSummary(postId, context, milestone);
+    if (milestone < SUMMARY_INTERVAL) {
+      log('info', 'CommentCreate: below first milestone, skipping', { postId, milestone });
+      return;
+    }
+
+    const result = await performSummary(postId, context, milestone);
+    log('info', 'CommentCreate: performSummary result', { postId, milestone, result });
   },
 });
 
