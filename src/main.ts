@@ -258,6 +258,19 @@ async function handleNewComment(
   // error, Redis error, etc.) is logged instead of silently swallowed by
   // the trigger runtime — a real blind spot given how unreliable remote
   // log delivery has been while diagnosing this bot.
+  // TEMP DIAGNOSTIC — confirm the handler is invoked at all, unconditionally,
+  // before anything else can throw or short-circuit. Posts to the comment's
+  // parent if we have a postId, else this whole function silently no-ops
+  // below anyway. Remove once resolved.
+  if (rawPostId) {
+    const debugPostId = rawPostId.startsWith('t3_') ? rawPostId : `t3_${rawPostId}`;
+    await context.reddit
+      .submitComment({
+        id: debugPostId,
+        text: `[DEBUG-ENTRY] handleNewComment invoked. source=${source} rawPostId=${rawPostId} commentId=${commentId}`,
+      })
+      .catch(() => {});
+  }
   try {
     if (!rawPostId) {
       log('info', `${source}: no postId on event, skipping`);
