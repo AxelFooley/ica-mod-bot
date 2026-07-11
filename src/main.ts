@@ -50,15 +50,6 @@ async function performSummary(
   if (!force) {
     const lastMilestoneRaw = await context.redis.get(milestoneKey);
     const lastMilestone = lastMilestoneRaw ? Number(lastMilestoneRaw) : 0;
-    // TEMP DIAGNOSTIC — remote logs have been unreliable; post gating state
-    // directly as a comment so it's observable via the Reddit API regardless.
-    // Remove once the non-force path is confirmed working.
-    await context.reddit
-      .submitComment({
-        id: postId,
-        text: `[DEBUG-GATE] lastMilestoneRaw=${JSON.stringify(lastMilestoneRaw)} lastMilestone=${lastMilestone} milestone=${milestone}`,
-      })
-      .catch(() => {});
     if (milestone <= lastMilestone) {
       log('info', 'performSummary: milestone already summarized, skipping', {
         postId,
@@ -73,12 +64,6 @@ async function performSummary(
       nx: true,
       expiration: new Date(Date.now() + 120_000), // 120s covers worst-case retries
     });
-    await context.reddit
-      .submitComment({
-        id: postId,
-        text: `[DEBUG-GATE] lockAcquired=${JSON.stringify(lockAcquired)} milestone=${milestone}`,
-      })
-      .catch(() => {});
     if (lockAcquired === null) {
       log('info', 'performSummary: lock held by concurrent invocation, skipping', {
         postId,
@@ -258,19 +243,6 @@ async function handleNewComment(
   // error, Redis error, etc.) is logged instead of silently swallowed by
   // the trigger runtime — a real blind spot given how unreliable remote
   // log delivery has been while diagnosing this bot.
-  // TEMP DIAGNOSTIC — confirm the handler is invoked at all, unconditionally,
-  // before anything else can throw or short-circuit. Posts to the comment's
-  // parent if we have a postId, else this whole function silently no-ops
-  // below anyway. Remove once resolved.
-  if (rawPostId) {
-    const debugPostId = rawPostId.startsWith('t3_') ? rawPostId : `t3_${rawPostId}`;
-    await context.reddit
-      .submitComment({
-        id: debugPostId,
-        text: `[DEBUG-ENTRY] handleNewComment invoked. source=${source} rawPostId=${rawPostId} commentId=${commentId}`,
-      })
-      .catch(() => {});
-  }
   try {
     if (!rawPostId) {
       log('info', `${source}: no postId on event, skipping`);
