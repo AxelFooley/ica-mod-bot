@@ -50,6 +50,15 @@ async function performSummary(
   if (!force) {
     const lastMilestoneRaw = await context.redis.get(milestoneKey);
     const lastMilestone = lastMilestoneRaw ? Number(lastMilestoneRaw) : 0;
+    // TEMP DIAGNOSTIC — remote logs have been unreliable; post gating state
+    // directly as a comment so it's observable via the Reddit API regardless.
+    // Remove once the non-force path is confirmed working.
+    await context.reddit
+      .submitComment({
+        id: postId,
+        text: `[DEBUG-GATE] lastMilestoneRaw=${JSON.stringify(lastMilestoneRaw)} lastMilestone=${lastMilestone} milestone=${milestone}`,
+      })
+      .catch(() => {});
     if (milestone <= lastMilestone) {
       log('info', 'performSummary: milestone already summarized, skipping', {
         postId,
@@ -64,6 +73,12 @@ async function performSummary(
       nx: true,
       expiration: new Date(Date.now() + 120_000), // 120s covers worst-case retries
     });
+    await context.reddit
+      .submitComment({
+        id: postId,
+        text: `[DEBUG-GATE] lockAcquired=${JSON.stringify(lockAcquired)} milestone=${milestone}`,
+      })
+      .catch(() => {});
     if (lockAcquired === null) {
       log('info', 'performSummary: lock held by concurrent invocation, skipping', {
         postId,
