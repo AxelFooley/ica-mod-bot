@@ -2,7 +2,8 @@
   "$schema": "https://developers.reddit.com/schema/config-file.v1.json",
   "name": "ica-mod-bot",
   "blocks": {
-    "entry": "src/main.ts"
+    "entry": "src/main.ts",
+    "triggers": ["onCommentCreate", "onCommentSubmit", "onPostDelete"]
   },
   "permissions": {
     "redis": true,
