@@ -86,7 +86,7 @@ async function performSummary(
 
 REGOLE:
 - Scrivi in prosa scorrevole, 2-4 brevi paragrafi. NIENTE elenchi puntati, NIENTE titoli in grassetto per ogni punto.
-- Usa il presente, non il passato: la discussione è ancora in corso (non "c'era", "ha detto", "è stata" — usa "c'è", "dice", "è").
+- Usa SEMPRE il presente indicativo, mai il passato prossimo o l'imperfetto — la discussione è ancora in corso, non è un evento concluso. Niente forme con "ha/hanno/è/sono" + participio passato, niente "-va/-vano". Esempi: scrivi "la gente dice" non "la gente ha detto"; scrivi "c'è chi pensa" non "c'era chi pensava"; scrivi "si lamentano di" non "si sono lamentati di"; scrivi "il post genera discussione" non "il post ha generato discussione".
 - Tono casual e colloquiale, come una chiacchierata tra amici — evita linguaggio burocratico o da comunicato stampa.
 - NON scrivere saluti o presentazioni (niente "Ciao a tutti", niente "Come moderatore"). Vai dritto al racconto.
 - NON scrivere conclusioni tipo "Spero sia utile" o ringraziamenti finali.
